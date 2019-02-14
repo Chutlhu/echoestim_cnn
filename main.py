@@ -18,30 +18,11 @@ net_type = 'girin'
 n_test   = 200  # dimension of test set
 n_valid  = 500
 n_epochs = 200  # or whatever
-batch_size = 1000 # or whatever
-patience = 30
+batch_size = 500 # or whatever
+patience = 20
 
 ## IMPORT DATA
 print('Loading data...')
-
-import h5py
-if net_type is 'habets':
-    with h5py.File('data/' + filename_rec, 'r') as file:
-        data_rec = np.array(file['rec_dataset'])
-        n_sig, n_chan, n_rirs = data_rec.shape
-        # FFT params
-        print('Organizing features...')
-        n_fft = 513
-        data_rec_fft = np.zeros([n_rirs, n_chan, 2*n_fft])
-        from scipy import signal
-
-        for i in range(n_rirs):
-            for j in range(n_chan):
-                _, _, Zxx = signal.stft(data_rec[:,j,i], nfft = 2*(n_fft-1))
-                A = np.mean(np.abs(Zxx), axis = 1)
-                p = np.mean(np.angle(Zxx), axis = 1)
-                data_rec_fft[i,j,:] = np.concatenate([A, p])
-        print(n_sig, n_chan, n_rirs, N)
 
 data_vast = scipy.io.loadmat('data/' + filename_vast)
 print('done.\n')
@@ -56,10 +37,6 @@ ILD  = data_vast['ILD']
 iIPD = data_vast['iIPD']
 rIPD = data_vast['rIPD']
 
-del data_vast
-if net_type is 'habets':
-    del data_rec
-
 iIPD = np.hstack([np.zeros([N,1]),iIPD]) # add an empty value for concatenation
 rIPD = np.hstack([np.zeros([N,1]),rIPD]) # add an empty value for concatenation
 print('done.\n')
@@ -69,10 +46,7 @@ print('Training and Test set...')
 fs = 16000
 var = np.stack([fs*tdoa, fs*itdoa, fs*tdoe], axis = 1).squeeze() # Nx3 matrix
 
-if net_type is 'habets':
-    obs = data_rec_fft          # FxN matrix
-if net_type is 'girin':
-    obs = np.stack([ILD, rIPD,iIPD], axis=2) # Fx3xN matrices
+obs = np.stack([ILD, rIPD,iIPD], axis=2) # Fx3xN matrices
 
 n_obs,n_feat,n_dims = obs.shape
 n_train = n_obs - n_test
@@ -145,36 +119,8 @@ class ConvNet_Girin(torch.nn.Module):
         x = self.fc3(x)
         return x
 
-class ConvNet_Habets(torch.nn.Module):
-    def __init__(self):
-        super(ConvNet_Habets, self).__init__()
-
-        self.conv1 = torch.nn.Sequential(
-            # inputs in the form MxF (M mics x F fft points)
-            # conv2d: in_channels, out_channels, kernel_size
-            # in_channels = 1
-            # n_filters = 64
-            torch.nn.Conv2d(1, 64, kernel_size=(2,1), stride = 1, padding = 0),
-            torch.nn.ReLU(),
-            torch.nn.MaxPool2d(kernel_size=2),
-            torch.nn.BatchNorm2d(64))
-        self.drop_out = torch.nn.Dropout()
-        self.fc1 = torch.nn.Linear(64*513, 512)
-        self.fc2 = torch.nn.Linear(512, 3)
-
-    def forward(self, x):
-        x = self.conv1(x)
-        x = self.drop_out(x)
-        x = x.view(-1, 64*513)
-        x = F.relu(self.fc1(x))
-        x = self.fc2(x)
-        return x
-
 # define the network
-if net_type is 'girin':
-    model = ConvNet_Girin()
-if net_type is 'habets':
-    model = ConvNet_Habets()
+model = ConvNet_Girin()
 
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 loss_func = torch.nn.MSELoss()  # this is for regression mean squared loss
@@ -230,28 +176,36 @@ for it in range(n_epochs):
                 error3 = nrmse(prediction.data.numpy()[:,2], train_t[start:end,2].data.numpy())
 
                 if (i) % 10 == 0:
-                    print('  Epoch [{}/{}], Batch [{:02d}/{:02d}], Loss: {:.4f}, nRMSE: {:.2f}%' \
+                    print('  Epoch [{}/{}], Batch [{:02d}/{:02d}], Loss: {:.4f}, nRMSE: {:.2f}' \
                           .format(it + 1, n_epochs, i, len(indeces), loss.item(), error))
 
 
         if phase == 'overfit':
             model.eval()
             prediction = model(overf_y)
+            loss1 = loss_func(prediction[:,0], overf_t[:,0])     # must be (1. nn output, 2. target)
+            loss2 = loss_func(prediction[:,1], overf_t[:,1])     # must be (1. nn output, 2. target)
+            loss3 = loss_func(prediction[:,2], overf_t[:,2])     # must be (1. nn output, 2. target)
+            loss = loss1 + loss2 + loss3
             error = np.mean(nrmse(prediction.data.numpy(), overf_t.data.numpy()))
             error1 = nrmse(prediction.data.numpy()[:,0], overf_t[:,0].data.numpy())
             error2 = nrmse(prediction.data.numpy()[:,1], overf_t[:,1].data.numpy())
             error3 = nrmse(prediction.data.numpy()[:,2], overf_t[:,2].data.numpy())
-            print('  Epoch [{}/{}], nRMSE: {:.2f}, TODA: {:.3f}, iTDOA: {:.3f}, TDOE: {:.3f}%' \
+            print('  Epoch [{}/{}], nRMSE: {:.2f}, TODA: {:.3f}, iTDOA: {:.3f}, TDOE: {:.3f}' \
                   .format(it + 1, n_epochs, error, error1, error2, error3))
 
         if phase == 'valid':
             model.eval()
             prediction = model(valid_y)
+            loss1 = loss_func(prediction[:,0], valid_t[:,0])     # must be (1. nn output, 2. target)
+            loss2 = loss_func(prediction[:,1], valid_t[:,1])     # must be (1. nn output, 2. target)
+            loss3 = loss_func(prediction[:,2], valid_t[:,2])     # must be (1. nn output, 2. target)
+            loss = loss1 + loss2 + loss3
             error = np.mean(nrmse(prediction.data.numpy(), valid_t.data.numpy()))
             error1 = nrmse(prediction.data.numpy()[:,0], valid_t[:,0].data.numpy())
             error2 = nrmse(prediction.data.numpy()[:,1], valid_t[:,1].data.numpy())
             error3 = nrmse(prediction.data.numpy()[:,2], valid_t[:,2].data.numpy())
-            print('  Epoch [{}/{}], nRMSE: {:.2f}, TODA: {:.3f}, iTDOA: {:.3f}, TDOE: {:.3f}%' \
+            print('  Epoch [{}/{}], nRMSE: {:.2f}, TODA: {:.3f}, iTDOA: {:.3f}, TDOE: {:.3f}' \
                   .format(it + 1, n_epochs, error, error1, error2, error3))
             # best model
             if it > 2 and error < np.min(np.array(performance[phase]['error'])):
@@ -259,12 +213,14 @@ for it in range(n_epochs):
                 best_performance = performance
             # early stopping
             if it > patience:
-                last_error = error
-                min_last_patience_errors = np.min(np.array(performance[phase]['error'][-patience:-1]))
-                print(np.abs(last_error - min_last_patience_errors))
-                if last_error > min_last_patience_errors:
+                if error1 > np.min(np.array(performance[phase]['err_tdoa'][-patience:-1]))      \
+                    and error2 > np.min(np.array(performance[phase]['err_itdoa'][-patience:-1]))\
+                    and error3 > np.min(np.array(performance[phase]['err_tdoe'][-patience:-1])):
                     converged = True
-                print('Early stopping:', error, min_last_patience_errors, ' - Converged?', converged)
+                print(error1 - np.min(np.array(performance[phase]['err_tdoa'][-patience:-1])))
+                print(error2 - np.min(np.array(performance[phase]['err_itdoa'][-patience:-1])))
+                print(error3 - np.min(np.array(performance[phase]['err_tdoe'][-patience:-1])))
+                print('Early stopping: Converged?', converged)
             print('\n')
 
         performance[phase]['error'].append(error)
@@ -272,7 +228,6 @@ for it in range(n_epochs):
         performance[phase]['err_tdoa'].append(error1)
         performance[phase]['err_itdoa'].append(error2)
         performance[phase]['err_tdoe'].append(error3)
-        print('\n')
 
 print('training ends.\n')
 
