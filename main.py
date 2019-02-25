@@ -5,6 +5,10 @@ import torch
 import torch.nn.functional as F
 from torch.autograd import Variable
 
+###
+##  DNN based on Nguyen and Girin paper (IROS 2018)
+#
+
 ## PERFORMANCE METRICS
 def nrmse(x, x_ref):
     return np.sqrt(np.sum((x - x_ref)**2, axis = 0))\
